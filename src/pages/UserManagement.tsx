@@ -1,18 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Header } from '../components/Layout/Header';
 import { Button } from '../components/UI/Button';
 import { Modal } from '../components/UI/Modal';
 import { useAuth } from '../hooks/useAuth';
-import { useAppContext } from '../context/AppContext';
-import { UserRole } from '../types';
+import { userService } from '../services/api';
+import { Database } from '../types/database';
 import { Users, Shield, Edit, Trash2, Plus } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+
+type User = Database['public']['Tables']['users']['Row'];
 
 export function UserManagement() {
   const { hasPermission } = useAuth();
-  const { state, dispatch } = useAppContext();
+  const [users, setUsers] = useState<User[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<UserRole | null>(null);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
@@ -27,13 +28,26 @@ export function UserManagement() {
     }
   });
 
-  const handleOpenModal = (user?: UserRole) => {
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const loadUsers = async () => {
+    try {
+      const data = await userService.getAllUsers();
+      setUsers(data);
+    } catch (error) {
+      console.error('Error loading users:', error);
+    }
+  };
+
+  const handleOpenModal = (user?: User) => {
     if (user) {
       setEditingUser(user);
       setFormData({
         email: user.email,
         role: user.role,
-        accessibleVenues: user.accessibleVenues || [],
+        accessibleVenues: user.accessible_venues || [],
         permissions: { ...user.permissions }
       });
     } else {
@@ -70,22 +84,23 @@ export function UserManagement() {
     try {
       setLoading(true);
 
-      const userData: UserRole = {
-        id: editingUser?.id || uuidv4(),
+      const userData = {
         email: formData.email,
         role: formData.role,
-        accessibleVenues: formData.accessibleVenues,
+        accessible_venues: formData.accessibleVenues,
         permissions: formData.permissions,
       };
 
       if (editingUser) {
-        dispatch({ type: 'UPDATE_USER_ROLE', payload: userData });
+        await userService.updateUser(editingUser.id, userData);
       } else {
-        dispatch({ type: 'ADD_USER_ROLE', payload: userData });
+        // For new users, we need clerk_id and name, but these would be set when they first login
+        alert('Users are automatically created when they first sign in with Clerk');
+        return;
       }
 
+      await loadUsers();
       handleCloseModal();
-      alert(editingUser ? 'User updated successfully!' : 'User created successfully!');
     } catch (error) {
       console.error('Error saving user:', error);
       alert(`Failed to save user: ${error.message}`);
@@ -97,28 +112,16 @@ export function UserManagement() {
   const handleDeleteUser = async (userId: string) => {
     if (confirm('Are you sure you want to delete this user?')) {
       try {
-        setLoading(true);
-        dispatch({ type: 'DELETE_USER_ROLE', payload: userId });
-        alert('User deleted successfully!');
+        await userService.deleteUser(userId);
+        await loadUsers();
       } catch (error) {
         console.error('Error deleting user:', error);
         alert(`Failed to delete user: ${error.message}`);
-      } finally {
-        setLoading(false);
       }
     }
   };
 
-  const handleVenueToggle = (venueId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      accessibleVenues: prev.accessibleVenues.includes(venueId)
-        ? prev.accessibleVenues.filter(id => id !== venueId)
-        : [...prev.accessibleVenues, venueId]
-    }));
-  };
-
-  const handlePermissionChange = (permission: keyof UserRole['permissions']) => {
+  const handlePermissionChange = (permission: keyof User['permissions']) => {
     setFormData(prev => ({
       ...prev,
       permissions: {
@@ -152,7 +155,7 @@ export function UserManagement() {
           <div className="flex items-center space-x-4">
             <h2 className="text-lg font-semibold text-gray-900">System Users</h2>
             <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm">
-              {state.userRoles.length} total
+              {users.length} total
             </span>
           </div>
           <Button icon={Plus} onClick={() => handleOpenModal()} loading={loading}>
@@ -183,7 +186,7 @@ export function UserManagement() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {state.userRoles.map((user) => (
+                {users.map((user) => (
                   <tr key={user.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div>
@@ -202,7 +205,7 @@ export function UserManagement() {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {user.role === 'admin' ? 'All Venues' : `${user.accessibleVenues?.length || 0} venues`}
+                      {user.role === 'admin' ? 'All Venues' : `${user.accessible_venues?.length || 0} venues`}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {Object.values(user.permissions || {}).filter(Boolean).length} permissions
@@ -227,7 +230,7 @@ export function UserManagement() {
                 ))}
               </tbody>
             </table>
-            {state.userRoles.length === 0 && (
+            {users.length === 0 && (
               <div className="text-center py-8 text-gray-500">
                 No users found. Add your first user to get started.
               </div>
@@ -273,29 +276,6 @@ export function UserManagement() {
             </select>
           </div>
 
-          {formData.role !== 'admin' && state.venues.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                Accessible Venues
-              </label>
-              <div className="max-h-40 overflow-y-auto border border-gray-300 rounded-md p-3">
-                {state.venues.map((venue) => (
-                  <label key={venue.id} className="flex items-center mb-2">
-                    <input
-                      type="checkbox"
-                      checked={formData.accessibleVenues.includes(venue.id)}
-                      onChange={() => handleVenueToggle(venue.id)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">
-                      {venue.name} ({venue.location})
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">
               Permissions
@@ -306,7 +286,7 @@ export function UserManagement() {
                   <input
                     type="checkbox"
                     checked={value}
-                    onChange={() => handlePermissionChange(key as keyof UserRole['permissions'])}
+                    onChange={() => handlePermissionChange(key as keyof User['permissions'])}
                     className="mr-2"
                     disabled={formData.role === 'admin'}
                   />

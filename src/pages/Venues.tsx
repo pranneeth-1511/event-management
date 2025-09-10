@@ -5,10 +5,12 @@ import { Modal } from '../components/UI/Modal';
 import { useAppContext } from '../context/AppContext';
 import { Venue } from '../types';
 import { Plus, MapPin, Users, Calendar, Search, Edit, Trash2 } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+import { venueService } from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 
 export function Venues() {
-  const { state, dispatch } = useAppContext();
+  const { state, dispatch, refreshData } = useAppContext();
+  const { hasPermission } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingVenue, setEditingVenue] = useState<Venue | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,22 +75,21 @@ export function Venues() {
     try {
       setLoading(true);
       
-      const venueData: Venue = {
-        id: editingVenue?.id || uuidv4(),
+      const venueData = {
         name: formData.name,
         location: formData.location,
         capacity: parseInt(formData.capacity),
-        eventId: formData.eventId || '',
+        event_id: formData.eventId || null,
       };
       
       if (editingVenue) {
-        dispatch({ type: 'UPDATE_VENUE', payload: venueData });
+        await venueService.updateVenue(editingVenue.id, venueData);
       } else {
-        dispatch({ type: 'ADD_VENUE', payload: venueData });
+        await venueService.createVenue(venueData);
       }
       
+      await refreshData();
       handleCloseModal();
-      alert(editingVenue ? 'Venue updated successfully!' : 'Venue created successfully!');
     } catch (error) {
       console.error('Error saving venue:', error);
       alert(`Failed to save venue: ${error.message}`);
@@ -100,14 +101,11 @@ export function Venues() {
   const handleDeleteVenue = async (venue: Venue) => {
     if (confirm('Are you sure you want to delete this venue?')) {
       try {
-        setLoading(true);
-        dispatch({ type: 'DELETE_VENUE', payload: venue.id });
-        alert('Venue deleted successfully!');
+        await venueService.deleteVenue(venue.id);
+        await refreshData();
       } catch (error) {
         console.error('Error deleting venue:', error);
         alert(`Failed to delete venue: ${error.message}`);
-      } finally {
-        setLoading(false);
       }
     }
   };

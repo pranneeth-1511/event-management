@@ -1,106 +1,75 @@
-import { useUser } from '@clerk/clerk-react';
-import { useEffect } from 'react';
-import { useAppContext } from '../context/AppContext';
-import { UserRole, AppUser } from '../types';
+import { useUser, useAuth as useClerkAuth } from '@clerk/clerk-react';
+import { useEffect, useState } from 'react';
+import { userService } from '../services/api';
+import { Database } from '../types/database';
+
+type User = Database['public']['Tables']['users']['Row'];
 
 export function useAuth() {
   const { user, isLoaded } = useUser();
-  const { state, dispatch } = useAppContext();
+  const { getToken } = useClerkAuth();
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isLoaded && user) {
-      console.log("Clerk user:", user);
-
-      // Normalize email (fallback to primary email address)
-      const userEmail = (user.primaryEmailAddress?.emailAddress || user.emailAddresses[0]?.emailAddress || "").toLowerCase();
-
-      // Find or create user role
-      let userRole = state.userRoles.find(role => role.email === userEmail);
-
-      if (!userRole) {
-        // --- SUPER ADMIN OVERRIDE ---
-        const isSuperAdmin = userEmail === "pranneethpersonal@gmail.com";
-
-        // Old "App Owner" admin (keep for compatibility)
-        const isAppOwner = userEmail === "admin@pranneethdk.com";
-
-        // Final admin flag
-        const isAdmin = isSuperAdmin || isAppOwner;
-
-        userRole = {
-          id: user.id || userEmail,
-          email: userEmail,
-          role: isAdmin ? 'admin' : 'viewer',
-          accessibleVenues: [],
-          permissions: {
-            canCreateEvents: isAdmin,
-            canManageParticipants: isAdmin,
-            canTakeAttendance: isAdmin,
-            canViewReports: true,
-            canManageUsers: isAdmin,
-          }
-        };
-
-        console.log("Creating new role for user:", userRole);
-        dispatch({ type: 'ADD_USER_ROLE', payload: userRole });
+    const initializeUser = async () => {
+      if (!isLoaded || !user) {
+        setLoading(false);
+        return;
       }
 
-      const appUser: AppUser = {
-        id: user.id || userEmail,
-        email: userEmail,
-        name: user.fullName || user.firstName || userEmail,
-        role: userRole!
-      };
+      try {
+        // Get or create user in Supabase
+        let supabaseUser = await userService.getUserByClerkId(user.id);
+        
+        if (!supabaseUser) {
+          // Create new user
+          const userData = {
+            clerk_id: user.id,
+            email: user.primaryEmailAddress?.emailAddress || user.emailAddresses[0]?.emailAddress || '',
+            name: user.fullName || user.firstName || 'User',
+            role: user.primaryEmailAddress?.emailAddress === 'pranneethpersonal@gmail.com' ? 'admin' as const : 'viewer' as const,
+            permissions: {
+              canManageUsers: user.primaryEmailAddress?.emailAddress === 'pranneethpersonal@gmail.com',
+              canViewReports: true,
+              canCreateEvents: user.primaryEmailAddress?.emailAddress === 'pranneethpersonal@gmail.com',
+              canTakeAttendance: user.primaryEmailAddress?.emailAddress === 'pranneethpersonal@gmail.com',
+              canManageParticipants: user.primaryEmailAddress?.emailAddress === 'pranneethpersonal@gmail.com',
+            }
+          };
+          
+          supabaseUser = await userService.createUser(userData);
+        }
 
-      console.log("Setting current user:", appUser);
-      dispatch({ type: 'SET_CURRENT_USER', payload: appUser });
-    }
-  }, [isLoaded, user, state.userRoles, dispatch]);
+        setCurrentUser(supabaseUser);
+      } catch (error) {
+        console.error('Error initializing user:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const hasPermission = (permission: keyof UserRole['permissions']): boolean => {
-    if (state.currentUser?.role.role === "admin") {
-      return true; // admins always pass
-    }
-    return state.currentUser?.role.permissions[permission] || false;
+    initializeUser();
+  }, [isLoaded, user]);
+
+  const hasPermission = (permission: keyof User['permissions']): boolean => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    return currentUser.permissions[permission] || false;
   };
 
   const hasVenueAccess = (venueId: string): boolean => {
-    if (!state.currentUser) return false;
-    if (state.currentUser.role.role === 'admin') return true;
-    return state.currentUser.role.accessibleVenues.includes(venueId);
-  };
-
-  const getAccessibleVenues = () => {
-    if (!state.currentUser) return [];
-    if (state.currentUser.role.role === 'admin') {
-      // Admin can access all venues
-      return state.events.flatMap(event => event.venues);
-    }
-    // Filter venues based on user access
-    return state.events
-      .flatMap(event => event.venues)
-      .filter(venue => state.currentUser!.role.accessibleVenues.includes(venue.id));
-  };
-
-  const getAccessibleEvents = () => {
-    if (!state.currentUser) return [];
-    if (state.currentUser.role.role === 'admin') {
-      return state.events;
-    }
-    // Filter events that have at least one accessible venue
-    return state.events.filter(event =>
-      event.venues.some(venue =>
-        state.currentUser!.role.accessibleVenues.includes(venue.id)
-      )
-    );
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    return currentUser.accessible_venues.includes(venueId);
   };
 
   return {
-    currentUser: state.currentUser,
+    user,
+    currentUser,
     hasPermission,
     hasVenueAccess,
-    getAccessibleVenues,
-    getAccessibleEvents,
-    isLoading: !isLoaded
+    isLoading: loading || !isLoaded,
+    getToken
   };
 }

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import { useAuth } from '../hooks/useAuth';
+import { eventService } from '../services/api';
 import { Header } from '../components/Layout/Header';
 import { Card, CardContent } from '../components/UI/Card';
 import { Button } from '../components/UI/Button';
@@ -7,18 +9,18 @@ import { Modal } from '../components/UI/Modal';
 import { Input } from '../components/UI/Input';
 import { Textarea } from '../components/UI/Textarea';
 import { Plus, Edit2, Trash2, Calendar, MapPin, Search } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
 
 export default function Events() {
-  const { state, dispatch } = useAppContext();
+  const { state, dispatch, refreshData } = useAppContext();
+  const { currentUser, hasPermission } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    date: '',
-    venue: '',
+    startDate: '',
+    endDate: '',
   });
 
   const openModal = (event?: any) => {
@@ -27,12 +29,12 @@ export default function Events() {
       setFormData({
         name: event.name,
         description: event.description,
-        date: event.date,
-        venue: event.venue,
+        startDate: event.startDate.split('T')[0],
+        endDate: event.endDate.split('T')[0],
       });
     } else {
       setEditingEvent(null);
-      setFormData({ name: '', description: '', date: '', venue: '' });
+      setFormData({ name: '', description: '', startDate: '', endDate: '' });
     }
     setIsModalOpen(true);
   };
@@ -42,27 +44,41 @@ export default function Events() {
     setEditingEvent(null);
   };
 
-  const handleSave = () => {
-    if (editingEvent) {
-      // update
-      dispatch({
-        type: 'UPDATE_EVENT',
-        payload: { ...editingEvent, ...formData },
-      });
-    } else {
-      // create
-      const newEvent = {
-        id: uuidv4(),
-        ...formData,
+  const handleSave = async () => {
+    if (!currentUser) return;
+
+    try {
+      const eventData = {
+        name: formData.name,
+        description: formData.description,
+        start_date: new Date(formData.startDate).toISOString(),
+        end_date: new Date(formData.endDate).toISOString(),
+        created_by: currentUser.id,
       };
-      dispatch({ type: 'ADD_EVENT', payload: newEvent });
+
+      if (editingEvent) {
+        await eventService.updateEvent(editingEvent.id, eventData);
+      } else {
+        await eventService.createEvent(eventData);
+      }
+
+      await refreshData();
+      closeModal();
+    } catch (error) {
+      console.error('Error saving event:', error);
+      alert('Failed to save event');
     }
-    closeModal();
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this event?')) {
-      dispatch({ type: 'DELETE_EVENT', payload: id });
+      try {
+        await eventService.deleteEvent(id);
+        await refreshData();
+      } catch (error) {
+        console.error('Error deleting event:', error);
+        alert('Failed to delete event');
+      }
     }
   };
 
@@ -124,11 +140,11 @@ export default function Events() {
                   <p className="text-gray-600 mt-2">{event.description}</p>
                   <div className="flex items-center text-sm text-gray-500 mt-4">
                     <Calendar className="w-4 h-4 mr-1" />
-                    {event.startDate ? new Date(event.startDate).toLocaleDateString() : event.date}
+                    {new Date(event.startDate).toLocaleDateString()}
                   </div>
                   <div className="flex items-center text-sm text-gray-500 mt-1">
                     <MapPin className="w-4 h-4 mr-1" />
-                    {event.venues?.length ? `${event.venues.length} venues` : event.venue}
+                    {event.venues?.length ? `${event.venues.length} venues` : 'No venues'}
                   </div>
                   <div className="flex gap-2 mt-4">
                     <Button size="sm" onClick={() => openModal(event)}>
@@ -166,14 +182,15 @@ export default function Events() {
           <Input
             type="date"
             label="Start Date"
-            value={formData.date}
-            onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+            value={formData.startDate}
+            onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
           />
           <Input
-            label="Venue"
-            value={formData.venue}
+            type="date"
+            label="End Date"
+            value={formData.endDate}
             onChange={(e) =>
-              setFormData({ ...formData, venue: e.target.value })
+              setFormData({ ...formData, endDate: e.target.value })
             }
           />
           <div className="flex justify-end gap-2">

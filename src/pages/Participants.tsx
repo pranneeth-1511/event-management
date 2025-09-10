@@ -5,11 +5,13 @@ import { Modal } from '../components/UI/Modal';
 import { useAppContext } from '../context/AppContext';
 import { Participant } from '../types';
 import { Plus, Edit, Trash2, Users, Search, QrCode, Mail, Phone, GraduationCap } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+import { participantService } from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 import QRCode from 'qrcode';
 
 export default function Participants() {
-  const { state, dispatch } = useAppContext();
+  const { state, dispatch, refreshData } = useAppContext();
+  const { hasPermission } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingParticipant, setEditingParticipant] = useState<Participant | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -83,22 +85,13 @@ export default function Participants() {
     }
 
     // Check for duplicate participant ID
-    const existingParticipant = state.participants.find(
-      p => p.participant_id === formData.participant_id && p.id !== editingParticipant?.id
-    );
-    
-    if (existingParticipant) {
-      alert('A participant with this ID already exists');
-      return;
-    }
 
     try {
       setLoading(true);
 
       const qrCode = await generateQRCode(formData.participant_id);
 
-      const participantData: Participant = {
-        id: editingParticipant?.id || uuidv4(),
+      const participantData = {
         participant_id: formData.participant_id,
         name: formData.name,
         email: formData.email,
@@ -108,19 +101,16 @@ export default function Participants() {
         college_university: formData.college_university,
         city_district: formData.city_district,
         qr_code: qrCode,
-        registration_date: editingParticipant?.registration_date || new Date().toISOString(),
-        created_at: editingParticipant?.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       };
 
       if (editingParticipant) {
-        dispatch({ type: 'UPDATE_PARTICIPANT', payload: participantData });
+        await participantService.updateParticipant(editingParticipant.id, participantData);
       } else {
-        dispatch({ type: 'ADD_PARTICIPANT', payload: participantData });
+        await participantService.createParticipant(participantData);
       }
 
+      await refreshData();
       handleCloseModal();
-      alert(editingParticipant ? 'Participant updated successfully!' : 'Participant registered successfully!');
     } catch (error) {
       console.error('Error saving participant:', error);
       alert(`Failed to save participant: ${error.message}`);
@@ -129,10 +119,15 @@ export default function Participants() {
     }
   };
 
-  const handleDeleteParticipant = (participantId: string) => {
+  const handleDeleteParticipant = async (participantId: string) => {
     if (confirm('Are you sure you want to delete this participant?')) {
-      dispatch({ type: 'DELETE_PARTICIPANT', payload: participantId });
-      alert('Participant deleted successfully!');
+      try {
+        await participantService.deleteParticipant(participantId);
+        await refreshData();
+      } catch (error) {
+        console.error('Error deleting participant:', error);
+        alert('Failed to delete participant');
+      }
     }
   };
 
