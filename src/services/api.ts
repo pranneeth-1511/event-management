@@ -21,9 +21,9 @@ export const userService = {
       .from('users')
       .select('*')
       .eq('clerk_id', clerkId)
-      .single();
+      .maybeSingle(); // 👈 cleaner than handling PGRST116 manually
     
-    if (error && error.code !== 'PGRST116') throw error;
+    if (error) throw error;
     return data;
   },
 
@@ -59,7 +59,38 @@ export const userService = {
   }
 };
 
+// ✅ Ensure default admin account
+export const ensureDefaultAdmin = async () => {
+  try {
+    const existing = await userService.getUserByClerkId('admin-initial');
+
+    if (!existing) {
+      await userService.createUser({
+        clerk_id: 'admin-initial',
+        email: 'admin@pranneethdk.com',
+        name: 'Super Admin',
+        role: 'admin',
+        permissions: {
+          canManageUsers: true,
+          canViewReports: true,
+          canCreateEvents: true,
+          canTakeAttendance: true,
+          canManageParticipants: true
+        },
+        accessible_venues: [],
+      });
+      console.log('✅ Default admin user created');
+    } else {
+      console.log('ℹ️ Default admin already exists');
+    }
+  } catch (err) {
+    console.error('❌ Error ensuring default admin:', err);
+  }
+};
+
+// --------------------
 // Events Service
+// --------------------
 export const eventService = {
   async createEvent(eventData: Tables['events']['Insert']) {
     const { data, error } = await supabase
